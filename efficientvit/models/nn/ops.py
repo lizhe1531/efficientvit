@@ -143,7 +143,7 @@ class IdentityLayer(nn.Module):
 #                             Basic Blocks                                      #
 #################################################################################
 
-
+# 深度可分离卷积
 class DSConv(nn.Module):
     def __init__(
         self,
@@ -185,7 +185,7 @@ class DSConv(nn.Module):
         x = self.point_conv(x)
         return x
 
-
+# MobileNetV2 架构的倒置残差瓶颈块
 class MBConv(nn.Module):
     def __init__(
         self,
@@ -206,6 +206,7 @@ class MBConv(nn.Module):
         act_func = val2tuple(act_func, 3)
         mid_channels = mid_channels or round(in_channels * expand_ratio)
 
+        # 使用 1x1 卷积将 in_channels 扩展到 mid_channels
         self.inverted_conv = ConvLayer(
             in_channels,
             mid_channels,
@@ -240,7 +241,7 @@ class MBConv(nn.Module):
         x = self.point_conv(x)
         return x
 
-
+# 融合倒置瓶颈块
 class FusedMBConv(nn.Module):
     def __init__(
         self,
@@ -262,6 +263,7 @@ class FusedMBConv(nn.Module):
 
         mid_channels = mid_channels or round(in_channels * expand_ratio)
 
+        # 空间卷积：直接将输入通过 kernel_size 的卷积操作从 in_channels 映射到 mid_channels，而不是先扩展通道再进行 depthwise 卷积。和 Conv 不同在于保持 groups=groups
         self.spatial_conv = ConvLayer(
             in_channels,
             mid_channels,
@@ -346,7 +348,7 @@ class LiteMLA(nn.Module):
         norm=(None, "bn2d"),
         act_func=(None, None),
         kernel_func="relu",
-        scales: tuple[int, ...] = (5,),
+        scales: tuple[int, ...] = (5,), # 控制 aggreg 的个数，默认只采用一个 5*5 的卷积核进行 aggreg
         eps=1.0e-15,
     ):
         super(LiteMLA, self).__init__()
@@ -368,6 +370,7 @@ class LiteMLA(nn.Module):
             norm=norm[0],
             act_func=act_func[0],
         )
+        # 就是深度可分离卷积，但因为输入为[1, 1536, 7, 7]，padding=(2,2)，所以输出大小正好也是[1, 1536, 7, 7]
         self.aggreg = nn.ModuleList(
             [
                 nn.Sequential(
@@ -386,6 +389,7 @@ class LiteMLA(nn.Module):
         )
         self.kernel_func = build_act(kernel_func, inplace=False)
 
+        # concat后proj输出
         self.proj = ConvLayer(
             total_dim * (1 + len(scales)),
             out_channels,
@@ -401,7 +405,6 @@ class LiteMLA(nn.Module):
 
         if qkv.dtype == torch.float16:
             qkv = qkv.float()
-
         qkv = torch.reshape(
             qkv,
             (
@@ -429,6 +432,7 @@ class LiteMLA(nn.Module):
         out = torch.matmul(vk, q)
         if out.dtype == torch.bfloat16:
             out = out.float()
+        # 下面一行填充注意力的目的？
         out = out[:, :, :-1] / (out[:, :, -1:] + self.eps)
 
         out = torch.reshape(out, (B, -1, H, W))
@@ -473,6 +477,7 @@ class LiteMLA(nn.Module):
         multi_scale_qkv = [qkv]
         for op in self.aggreg:
             multi_scale_qkv.append(op(qkv))
+        # 和论文结构图不一致，这里是先进行不同尺度的qkv的concat，然后再送进LiteMLA中的
         qkv = torch.cat(multi_scale_qkv, dim=1)
 
         H, W = list(qkv.size())[-2:]
