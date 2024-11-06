@@ -1,1 +1,0 @@
-/home/lizhe/code/efficientvit/output/cls/l1_224/checkpoint/sync.pt
